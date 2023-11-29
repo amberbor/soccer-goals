@@ -1,12 +1,7 @@
-import os
-from datetime import datetime, timedelta, timezone
 
-import requests
 import subprocess
 from seleniumwire import webdriver
-from urllib.parse import urljoin
 
-# Initialize Selenium WebDriver
 chrome_options = webdriver.ChromeOptions()
 chrome_options.add_argument('--headless')
 driver = webdriver.Chrome(options=chrome_options)
@@ -25,17 +20,13 @@ try:
             print("found" + m3u8_url)
             print(m3u8_url)
 
-            # Replace this with the duration you want to capture before the current time
-            duration_to_capture = "00:03:00"
-
             # Replace this with the desired output path and filename
-            output_video_path = "output_video.mp4"
+            output_video_path = f"{title}%03d.ts"
 
             # Call the function to capture the livestream segment using FFmpeg
 
             ffmpeg_command = [
                 'ffmpeg',
-                '-ss', "00:03:00",  # Replace with your desired start time
                 '-i', m3u8_url,
                 '-segment_time', '30',
                 '-f', 'segment',

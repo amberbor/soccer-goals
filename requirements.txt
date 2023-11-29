@@ -65,3 +65,5 @@ yarl==1.9.2
 youtube-dl==2021.12.17
 zipp==3.17.0
 zstandard==0.21.0
+
+fuzzywuzzy~=0.18.0
