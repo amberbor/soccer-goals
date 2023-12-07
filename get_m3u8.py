@@ -44,7 +44,7 @@ class LivestreamCapturer:
                     ffmpeg_command = [
                         'ffmpeg',
                         '-i', m3u8_url,
-                        '-segment_time', '30',
+                        '-segment_time', '60',
                         '-f', 'segment',
                         '-c', 'copy',
                         '-map', '0',
@@ -55,21 +55,6 @@ class LivestreamCapturer:
 
                     # Run the ffmpeg command
                     subprocess.Popen(ffmpeg_command)
-
-                    # Add the new segment to the list
-                    # Update the segments list by listing files in the folder
-                    self.segments = [f"{self.title}/{filename}" for filename in os.listdir(self.title)]
-
-                    # Check if the list exceeds the maximum allowed segments
-                    if len(self.segments) > self.max_segments:
-                        # Get the filename of the oldest segment
-                        oldest_segment = self.segments.pop(0)
-
-                        # Check if the file exists before attempting to remove it
-                        if os.path.exists(oldest_segment):
-                            os.remove(oldest_segment)
-                        else:
-                            print(f"File does not exist: {oldest_segment}")
                 else:
                     print("not found")
 
