@@ -1,12 +1,14 @@
 import os
 import subprocess
 from seleniumwire import webdriver
+import chromedriver_autoinstaller
 
 
 class LivestreamCapturer:
     def __init__(self, url, title, max_segments=3):
         self.url = url
         self.title = title
+        chromedriver_autoinstaller.install()
         self.max_segments = max_segments
         self.segments = []  # List to store segment filenames
         self.output_video_path = f"{self.title}/{self.title}_%03d.ts"

@@ -1,3 +1,4 @@
+import logging
 import os
 import subprocess
 import time
@@ -7,26 +8,30 @@ import mysql.connector
 from moviepy.video.io.VideoFileClip import VideoFileClip
 from seleniumwire import webdriver
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from threading import Lock
 from bs4 import BeautifulSoup
 from fuzzywuzzy import fuzz
 import requests
 import json
 from apscheduler.schedulers.background import BackgroundScheduler
+
+from celery_config import celery
+from celery import current_task
+
 from get_m3u8 import LivestreamCapturer
 import cloudinary
 from cloudinary.uploader import upload
+import chromedriver_autoinstaller
 
 
 class LivescoreScraper:
     def __init__(self):
         self.segments = []
         self.driver = None
+        chromedriver_autoinstaller.install()
         self.today_date = datetime.today().strftime('%Y-%m-%d')
         self.file_path = os.path.join("games", f"{self.today_date}.json")
         self.livestream_executor = ProcessPoolExecutor(max_workers=3)
         self.main_executor = ThreadPoolExecutor()
-        self.file_lock = Lock()
         self.scheduler = BackgroundScheduler()
         self.scheduler.start()
         # MySQL connection parameters
@@ -267,11 +272,24 @@ class LivescoreScraper:
         ratio = fuzz.partial_ratio(team1.lower(), team2.lower())
         return ratio >= threshold
 
-    def multiproccess(self, url, title):
+    @celery.task
+    def multiproccess(self, url=None, title=None):
         print("multiproccess")
         capturer = LivestreamCapturer(url, title)
-        self.livestream_executor.submit(capturer.capture_livestream)
+        local_logger = logging.getLogger(__name__)  # Create a local logger
 
+        try:
+            local_logger.info("Starting livestream capture.")
+            current_task.update_state(state='PROGRESS', meta={'message': 'Starting livestream capture.'})
+
+            # Perform the livestream capture
+            capturer.capture_livestream()
+
+            local_logger.info("Livestream capture completed.")
+            current_task.update_state(state='PROGRESS', meta={'message': 'Livestream capture completed.'})
+        except Exception as e:
+            local_logger.error(f"Error during livestream capture: {e}")
+            current_task.update_state(state='FAILURE', meta={'message': f"Error during livestream capture: {e}"})
     def schedule_tasks(self):
         print("scheduler")
         try:
@@ -305,16 +323,7 @@ class LivescoreScraper:
 
     def check_scheduled_task(self, url, title):
         print(f"Scheduled task executed for {title} at {datetime.now()}")
-        self.multiproccess(url, title)
-
-    def read_file(self):
-        with open(self.file_path, 'r') as fcc_file:
-            fcc_data = json.loads(fcc_file.read())
-            return fcc_data
-
-    def write_file(self, fcc_data):
-        with open(self.file_path, 'w') as fcc_file:
-            fcc_file.write(json.dumps(fcc_data))
+        self.__class__.multiproccess.apply_async(args=(url, title))
 
     def is_valid_time_format(self, time_str):
         try:
