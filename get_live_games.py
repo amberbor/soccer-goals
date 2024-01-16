@@ -1,9 +1,9 @@
 import os
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
-import mysql.connector
+from mysql.connector.pooling import MySQLConnectionPool
 from moviepy.video.io.VideoFileClip import VideoFileClip
 from seleniumwire import webdriver
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
@@ -20,15 +20,15 @@ from cloudinary.uploader import upload
 
 class LivescoreScraper:
     def __init__(self):
-        self.segments = []
+        self.logger = None
         self.driver = None
         self.today_date = datetime.today().strftime('%Y-%m-%d')
-        self.file_path = os.path.join("games", f"{self.today_date}.json")
         self.livestream_executor = ProcessPoolExecutor(max_workers=3)
         self.main_executor = ThreadPoolExecutor()
-        self.file_lock = Lock()
         self.scheduler = BackgroundScheduler()
         self.scheduler.start()
+        self.current_time = datetime.now().time()
+        self.end_time = (datetime.combine(datetime.today(), self.current_time) + timedelta(hours=2)).time()
         # MySQL connection parameters
         self.db_host = '127.0.0.1'
         self.db_user = 'root'
@@ -37,14 +37,52 @@ class LivescoreScraper:
         self.port = 3308
 
         # Establish MySQL connection
-        self.mysql_conn = mysql.connector.connect(
-            host=self.db_host,
-            user=self.db_user,
-            password=self.db_password,
-            database=self.db_name,
-            port= self.port
-        )
-        self.mysql_cursor = self.mysql_conn.cursor(dictionary=True)
+        # self.db_pool = MySQLConnectionPool(
+        #     pool_name="soccer_pool",
+        #     pool_size=5,
+        #     host=self.db_host,
+        #     user=self.db_user,
+        #     password=self.db_password,
+        #     database=self.db_name,
+        #     port= self.port
+        # )
+
+        self.mysql_conn = None
+        self.db_pool = None
+        self.mysql_cursor = None
+        # self.mysql_conn = self.db_pool.get_connection()
+        # self.mysql_cursor = self.mysql_conn.cursor(dictionary=True)
+
+    def open_database_connection(self):
+        try:
+            if not self.db_pool:
+                self.db_pool = MySQLConnectionPool(
+                    pool_name="soccer_pool",
+                    pool_size=5,
+                    host=self.db_host,
+                    user=self.db_user,
+                    password=self.db_password,
+                    database=self.db_name,
+                    port=self.port
+                )
+
+            if not self.mysql_conn:
+                self.mysql_conn = self.db_pool.get_connection()
+                self.mysql_cursor = self.mysql_conn.cursor(dictionary=True)
+        except Exception as e:
+            print(f"Error while opening database connection: {e}")
+    def close_database_connection(self):
+        try:
+            if self.mysql_cursor:
+                self.mysql_cursor.close()
+            if self.mysql_conn:
+                print("Closing database connection...")
+                self.mysql_conn.close()
+                print("Database connection closed.")
+        except AttributeError as attr_error:
+            print(f"AttributeError while closing database connection: {attr_error}")
+        except Exception as e:
+            print(f"Error while closing database connection: {e}")
 
     def start_driver(self):
         options = webdriver.ChromeOptions()
@@ -52,44 +90,20 @@ class LivescoreScraper:
         self.driver = webdriver.Chrome(options=options)
 
     def stop_driver(self):
-        if self.driver:
-            self.driver.quit()
-        if self.mysql_conn.is_connected():
-            self.mysql_cursor.close()
-            self.mysql_conn.close()
+        try:
+            if self.driver:
+                self.driver.quit()
+        except Exception as e:
+            print(f"Error while stopping driver: {e}")
+        finally:
+            self.close_database_connection()
 
-    def save_match_to_database(self, match_data):
-        # Insert or update match data in the 'matches' table
+    def update_match_to_database(self, match_data):
+        print("Update file Match was found")
 
-        today_matches = self.get_today_matches_from_title(match_data['title'])
+        today_matches = self.get_time_matches_from_title(match_data['title'])
 
-        if not today_matches:
-            query = (
-                "INSERT INTO matches (title, home_team_name, away_team_name, score_home, score_away, match_time, is_opened, stream, league_name) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
-                "ON DUPLICATE KEY UPDATE "
-                "home_team_name = VALUES(home_team_name), "
-                "away_team_name = VALUES(away_team_name), "
-                "score_home = VALUES(score_home), "
-                "score_away = VALUES(score_away), "
-                "match_time = VALUES(match_time), "
-                "is_opened = VALUES(is_opened), "
-                "stream = VALUES(stream),"
-                "league_name = VALUES(league_name)"
-            )
-
-            values = (
-                match_data['title'],
-                match_data['home_team_name'],
-                match_data['away_team_name'],
-                match_data['score_home'],
-                match_data['score_away'],
-                match_data['match_time'],
-                match_data['is_opened'],
-                match_data.get('stream', None),
-                match_data.get('league_name', None)
-            )
-        else:
+        if today_matches[0]:
             existing_match_data = today_matches[0]
 
             query = (
@@ -107,11 +121,15 @@ class LivescoreScraper:
                 match_data['title']
             )
 
+            self.mysql_cursor.execute(query, values)
+            self.mysql_conn.commit()
+
             if (
                     (match_data["score_home"] != existing_match_data["score_home"]
-                    or match_data["score_away"] != existing_match_data["score_away"])
+                     or match_data["score_away"] != existing_match_data["score_away"])
                     and (match_data["score_home"] != "0" or match_data["score_away"] != "0")
             ):
+                print("Goal was made", match_data["title"])
                 secure_url = self.save_goal(
                     title=match_data["title"],
                     filename=f"{match_data['title']}_{match_data['score_home']}-{match_data['score_away']}.mp4",
@@ -123,54 +141,171 @@ class LivescoreScraper:
                     match_url=secure_url,
                 )
 
-        # Perform your update logic here
-        self.mysql_cursor.execute(query, values)
-        self.mysql_conn.commit()
+    def save_match_to_database(self, match_data):
+        # Insert or update match data in the 'matches' table
+
+        try:
+            # self.open_database_connection()
+
+            today_matches = self.get_today_matches_from_title(match_data['title'])
+
+            if not today_matches:
+                print('No matches')
+                query = (
+                    "INSERT INTO matches (title, home_team_name, away_team_name, score_home, score_away, match_time, is_opened, stream, league_name) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    "ON DUPLICATE KEY UPDATE "
+                    "home_team_name = VALUES(home_team_name), "
+                    "away_team_name = VALUES(away_team_name), "
+                    "score_home = VALUES(score_home), "
+                    "score_away = VALUES(score_away), "
+                    "match_time = VALUES(match_time), "
+                    "is_opened = VALUES(is_opened), "
+                    "stream = VALUES(stream),"
+                    "league_name = VALUES(league_name)"
+                )
+
+                values = (
+                    match_data['title'],
+                    match_data['home_team_name'],
+                    match_data['away_team_name'],
+                    match_data['score_home'],
+                    match_data['score_away'],
+                    match_data['match_time'],
+                    match_data['is_opened'],
+                    match_data.get('stream', None),
+                    match_data.get('league_name', None)
+                )
+                self.mysql_cursor.execute(query, values)
+                self.mysql_conn.commit()
+            else:
+                print("Update file Match was found")
+                existing_match_data = today_matches[0]
+
+                query = (
+                    "UPDATE matches "
+                    "SET score_home = %s, "
+                    "    score_away = %s, "
+                    "    is_opened = %s "
+                    "WHERE title = %s"
+                )
+
+                values = (
+                    match_data['score_home'],
+                    match_data['score_away'],
+                    match_data['is_opened'],
+                    match_data['title']
+                )
+
+                # Perform your update logic here
+                self.mysql_cursor.execute(query, values)
+                self.mysql_conn.commit()
+
+                if (
+                        (match_data["score_home"] != existing_match_data["score_home"]
+                        or match_data["score_away"] != existing_match_data["score_away"])
+                        and (match_data["score_home"] != "0" or match_data["score_away"] != "0")
+                ):
+                    print("Goal was made", match_data["title"])
+                    secure_url = self.save_goal(
+                        title=match_data["title"],
+                        filename=f"{match_data['title']}_{match_data['score_home']}-{match_data['score_away']}.mp4",
+                    )
+                    self.save_goal_to_database(
+                        title=match_data["title"],
+                        match_score="{}-{}".format(match_data['score_home'], match_data['score_away']),
+                        match_id=existing_match_data["id"],
+                        match_url=secure_url,
+                    )
+        except Exception as e:
+            self.logger.error(f"Error in save_match_to_database: {e}")
+
 
     def save_goal_to_database(self, title, match_url, match_id, match_score):
         # Insert goal data in the 'goals' table
-        query = "INSERT INTO goals (match_title, match_url, match_id, match_score) VALUES (%s, %s, %s, %s)"
-        values = (title, match_url, match_id, match_score)
+        try:
+            # self.open_database_connection()
+            query = "INSERT INTO goals (match_title, match_url, match_id, match_score) VALUES (%s, %s, %s, %s)"
+            values = (title, match_url, match_id, match_score)
 
-        self.mysql_cursor.execute(query, values)
-        self.mysql_conn.commit()
+            self.mysql_cursor.execute(query, values)
+            self.mysql_conn.commit()
+        except Exception as e:
+            self.logger.error(f"Error in save_match_to_database: {e}")
 
-    def get_today_matches_from_database(self):
-        # Get today's matches from the 'matches' table
-        query = "SELECT * FROM matches WHERE DATE(start_date) = %s"
-        values = (self.today_date,)
 
-        self.mysql_cursor.execute(query, values)
-        today_matches = self.mysql_cursor.fetchall()
-        return today_matches
+    # def get_today_matches_from_database(self):
+    #     # Get today's matches from the 'matches' table
+    #     try:
+    #         # self.open_database_connection()
+    #         query = "SELECT * FROM matches WHERE DATE(start_date) = %s"
+    #         values = (self.today_date,)
+    #
+    #         self.mysql_cursor.execute(query, values)
+    #         today_matches = self.mysql_cursor.fetchall()
+    #         return today_matches
+    #     except Exception as e:
+    #         self.logger.error(f"Error in get_today_matches_from_database: {e}")
 
     def get_today_matches_from_title(self, title):
         # Get today's matches from the 'matches' table
-        query = "SELECT * FROM matches WHERE DATE(start_date) = %s AND title = %s"
-        values = (self.today_date,title)
+        try:
+            # self.open_database_connection()
+            query = "SELECT * FROM matches WHERE DATE(start_date) = %s AND title = %s"
+            values = (self.today_date,title)
 
-        self.mysql_cursor.execute(query, values)
-        today_matches = self.mysql_cursor.fetchall()
-        return today_matches
+            self.mysql_cursor.execute(query, values)
+            today_matches = self.mysql_cursor.fetchall()
+            return today_matches
+        except Exception as e:
+            self.logger.error(f"Error in get_today_matches_from_title: {e}")
+
+    def get_time_matches_from_title(self, title):
+        # Get today's matches from the 'matches' table
+        try:
+            # self.open_database_connection()
+            query = "SELECT * FROM matches WHERE DATE(start_date) = %s AND title = %s AND (STR_TO_DATE(match_time, '%%H:%%i') >= %s OR STR_TO_DATE(match_time, '%%H:%%i') <= %s)"
+            values = (self.today_date,title, self.current_time , self.end_time)
+
+            self.mysql_cursor.execute(query, values)
+            today_matches = self.mysql_cursor.fetchall()
+            return today_matches
+        except Exception as e:
+            self.logger.error(f"Error in get_today_matches_from_title: {e}")
+
+
 
     def get_today_goals_from_database(self):
         # Get today's goals from the 'goals' table
-        query = "SELECT * FROM goals WHERE DATE(start_date) = %s"
-        values = (self.today_date,)
+        try:
+            # Open database connection
+            # self.open_database_connection()
 
-        self.mysql_cursor.execute(query, values)
-        today_goals = self.mysql_cursor.fetchall()
-        return today_goals
+            query = "SELECT * FROM goals WHERE DATE(start_date) = %s"
+            values = (self.today_date,)
+
+            self.mysql_cursor.execute(query, values)
+            today_goals = self.mysql_cursor.fetchall()
+            return today_goals
+        except Exception as e:
+            self.logger.error(f"Error in get_today_goals_from_database: {e}")
+
 
     def delete_game_by_title(self, title):
         # Delete a game from the 'matches' table based on its title
-        query = "DELETE FROM matches WHERE title = %s"
-        values = (title,)
+        try:
+            # Open database connection
+            # self.open_database_connection()
+            query = "DELETE FROM matches WHERE title = %s"
+            values = (title,)
 
-        self.mysql_cursor.execute(query, values)
-        self.mysql_conn.commit()
+            self.mysql_cursor.execute(query, values)
+            self.mysql_conn.commit()
 
-        print(f"Game with title '{title}' deleted from the database.")
+            print(f"Game with title '{title}' deleted from the database.")
+        except Exception as e:
+            self.logger.error(f"Error in delete_game_by_title: {e}")
+
 
     def upload_to_cloudinary(self,video_path, public_id):
         cloudinary.config(
@@ -186,6 +321,7 @@ class LivescoreScraper:
     def set_match_opened(self, match_id):
         try:
             # Update the 'is_opened' column in the 'matches' table
+            # self.open_database_connection()
             query = "UPDATE matches SET is_opened = TRUE WHERE id = %s"
             values = (match_id,)
 
@@ -227,16 +363,25 @@ class LivescoreScraper:
                     }
 
                     stream_info = self.get_url_games(home_team_name)
-                    if stream_info and self.get_today_matches_from_title(game["title"]) is not None:
+                    today_matches_from_title = self.get_today_matches_from_title(game["title"])
+                    if stream_info and today_matches_from_title is None:
+                        print("Matches are creating")
                         stream_url, league_name = stream_info
                         game["stream"] = stream_url
                         game["league_name"] = league_name
                         self.save_match_to_database(game)
-                        self.schedule_tasks()
+                    elif stream_info and today_matches_from_title is not None:
+                        print("Matches are updating")
+                        self.update_match_to_database(game)
+                        self.schedule_tasks(today_matches_from_title)
 
-                time.sleep(2)
+                time.sleep(10)
         finally:
             self.stop_driver()
+            if self.mysql_cursor:
+                self.mysql_cursor.close()
+            if self.mysql_conn:
+                self.mysql_conn.close()
 
     def get_url_games(self, title):
         base_url = "https://bingsport.xyz/"
@@ -272,49 +417,37 @@ class LivescoreScraper:
         capturer = LivestreamCapturer(url, title)
         self.livestream_executor.submit(capturer.capture_livestream)
 
-    def schedule_tasks(self):
+    def schedule_tasks(self, today_matches_from_title):
         print("scheduler")
         try:
-            today_matches = self.get_today_matches_from_database()
-
-            for match in today_matches:
-                url, title, time_str = match["stream"], match["title"], match["match_time"]  # Adjust index based on your database schema
+            for match in today_matches_from_title:
+                url, title, time_str = match["stream"], match["title"], match["match_time"]
                 if self.is_valid_time_format(time_str):
                     scheduled_time = datetime.strptime(time_str, "%H:%M").time()
                     current_time = datetime.now().time()
                     time_difference = (datetime.combine(datetime.today(), current_time) -
                                        datetime.combine(datetime.today(), scheduled_time)).total_seconds() / 60
 
-                    if current_time >= scheduled_time and not match["is_opened"]:  # Adjust index based on your database schema
+                    if current_time >= scheduled_time and not match["is_opened"]:
                         # Set 'is_opened' in the database
-                        self.set_match_opened(match["id"])  # Assuming the first column is the match_id
+                        self.set_match_opened(match["id"])
 
-                        # Perform your scheduled task here
                         self.check_scheduled_task(url, title)
 
                     # Remove match if time difference exceeds 150 minutes
                     if time_difference >= 150:
-                        # Remove the match from the database
-                        self.delete_game_by_title(match["title"])  # Assuming the first column is the match_id
-
+                        self.delete_game_by_title(match["title"])
+                else:
+                    self.delete_game_by_title(match["title"])
         except Exception as e:
             print(f"Error in schedule_tasks: {e}")
-            # Handle the exception as needed
+
 
         time.sleep(1)
 
     def check_scheduled_task(self, url, title):
         print(f"Scheduled task executed for {title} at {datetime.now()}")
         self.multiproccess(url, title)
-
-    def read_file(self):
-        with open(self.file_path, 'r') as fcc_file:
-            fcc_data = json.loads(fcc_file.read())
-            return fcc_data
-
-    def write_file(self, fcc_data):
-        with open(self.file_path, 'w') as fcc_file:
-            fcc_file.write(json.dumps(fcc_data))
 
     def is_valid_time_format(self, time_str):
         try:
@@ -332,7 +465,7 @@ class LivescoreScraper:
             return False
 
     def save_goal(self, title, filename):
-        print("Goaaaaaaaaaal")
+        print("Goaaaaaaaaaal", title)
 
         folder_path = os.path.join(os.getcwd(), title)
 
@@ -340,43 +473,51 @@ class LivescoreScraper:
             ts_files = [filename for filename in os.listdir(folder_path) if
                         filename.endswith(".ts") and self.is_valid_video(os.path.join(folder_path, filename))]
 
-            ts_files.sort(key=lambda x: os.path.getmtime(os.path.join(folder_path, x)) if os.path.isfile(
-                os.path.join(folder_path, x)) else 0, reverse=True)
+            # Find the latest numeric part without sorting
+            numeric_parts = sorted([int(''.join(filter(str.isdigit, ts_file))) for ts_file in ts_files], reverse=True)
 
-            latest_ts_files = ts_files[:2][::-1]
+            # Find the latest and second latest numeric parts
+            file_1, file_2, file_3 = numeric_parts[1], numeric_parts[2], numeric_parts[3]
 
-            if len(latest_ts_files) == 2:
-                ts_file_paths = [os.path.join(folder_path, ts_file) for ts_file in latest_ts_files]
+            file_3_filename = f"{title}_{file_3:03d}.ts"
+            file_2_filename = f"{title}_{file_2:03d}.ts"
+            file_1_filename = f"{title}_{file_1:03d}.ts"
 
-                with open(os.path.join(folder_path, 'file_list.txt'), 'w') as file_list:
-                    for ts_file in ts_file_paths:
-                        file_list.write(f"file '{ts_file}'\n")
+            ts_file_paths = [os.path.join(folder_path, file_1_filename), os.path.join(folder_path, file_2_filename), os.path.join(folder_path, file_3_filename)]
 
-                ffmpeg_command = (
-                    f'ffmpeg -f concat -safe 0 -i "{os.path.join(folder_path, "file_list.txt")}" '
-                    f'-c copy "{os.path.join(folder_path, filename)}"'
-                )
+            with open(os.path.join(folder_path, 'file_list.txt'), 'w') as file_list:
+                for ts_file in ts_file_paths:
+                    file_list.write(f"file '{ts_file}'\n")
 
-                subprocess.run(ffmpeg_command, shell=True)
+            ffmpeg_command = (
+                f'ffmpeg -f concat -safe 0 -i "{os.path.join(folder_path, "file_list.txt")}" '
+                f'-c copy -async 1 "{os.path.join(folder_path, filename)}"'
+            )
 
-                os.remove(os.path.join(folder_path, 'file_list.txt'))
-                base_filename, extension = os.path.splitext(filename)
-                public_id = base_filename
-                secure_url = self.upload_to_cloudinary(os.path.join(folder_path, filename), public_id)
-                return secure_url
-            else:
-                print("Not enough valid '.ts' files to create an MP4")
+            subprocess.run(ffmpeg_command, shell=True)
+
+            os.remove(os.path.join(folder_path, 'file_list.txt'))
+
+            base_filename, extension = os.path.splitext(filename)
+            public_id = base_filename
+            secure_url = self.upload_to_cloudinary(os.path.join(folder_path, filename),
+                                                   public_id)
+            print("secure_url")
+            return secure_url
         else:
             print(f"Folder not found: {folder_path}")
 
     def run_parallel(self):
-        # Submit both main code and livestream captures to the process pool
-        main_future = self.main_executor.submit(self.get_today_matches)
-        main_future.result()
-        # Schedule tasks separately using APScheduler
-        # Sleep for a short time to avoid high CPU usage
-        time.sleep(2)
+        while True:
+            try:
+                self.open_database_connection()
+                self.get_today_matches()
+            except Exception as e:
+                print(f"Error in run_continuous: {e}")
+            finally:
+                self.close_database_connection()
 
+            time.sleep(5)
 
 
 def main():

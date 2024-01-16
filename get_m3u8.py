@@ -8,7 +8,6 @@ class LivestreamCapturer:
         self.url = url
         self.title = title
         self.max_segments = max_segments
-        self.segments = []  # List to store segment filenames
         self.output_video_path = f"{self.title}/{self.title}_%03d.ts"
         self.driver = None
 
@@ -50,7 +49,7 @@ class LivestreamCapturer:
                         '-map', '0',
                         '-bsf:v', 'h264_mp4toannexb',
                         '-reset_timestamps', '1',
-                        self.output_video_path  # Use the generated filename
+                        self.output_video_path
                     ]
 
                     # Run the ffmpeg command
