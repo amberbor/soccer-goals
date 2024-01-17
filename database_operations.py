@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 from mysql.connector.pooling import MySQLConnectionPool
 
 class DatabaseHelper:
@@ -11,6 +13,9 @@ class DatabaseHelper:
         self.mysql_conn = None
         self.mysql_cursor = None
         self.save_goal = save_goal
+        self.today_date = datetime.today().strftime('%Y-%m-%d')
+        self.current_time = datetime.now().time()
+        self.end_time = (datetime.combine(datetime.today(), self.current_time) + timedelta(hours=2)).time()
 
     def open_database_connection(self):
         try:
@@ -168,8 +173,8 @@ class DatabaseHelper:
         return today_matches
 
     def get_time_matches_from_title(self, title):
-        query = "SELECT * FROM matches WHERE DATE(start_date) = %s AND title = %s AND (STR_TO_DATE(match_time, '%%H:%%i') >= %s OR STR_TO_DATE(match_time, '%%H:%%i') <= %s)"
-        values = (self.today_date, title, self.current_time , self.end_time)
+        query = "SELECT * FROM matches WHERE DATE(start_date) = %s AND title = %s AND (match_time >= %s OR match_time <= %s)"
+        values = (self.today_date, title, self.current_time.strftime('%H:%M') , self.end_time.strftime('%H:%M'))
 
         self.mysql_cursor.execute(query, values)
         today_matches = self.mysql_cursor.fetchall()

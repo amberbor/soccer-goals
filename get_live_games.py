@@ -43,7 +43,7 @@ class LivescoreScraper:
             password=self.db_password,
             database=self.db_name,
             port=self.port,
-            save_goal=self.save_goal
+            save_goal=self.save_goal,
         )
 
         # Establish MySQL connection
@@ -121,13 +121,13 @@ class LivescoreScraper:
 
                     stream_info = self.get_url_games(home_team_name)
                     today_matches_from_title = self.db_helper.get_today_matches_from_title(game["title"])
-                    if stream_info and today_matches_from_title is None:
+                    if stream_info and not today_matches_from_title:
                         print("Matches are creating")
                         stream_url, league_name = stream_info
                         game["stream"] = stream_url
                         game["league_name"] = league_name
                         self.db_helper.save_match_to_database(game)
-                    elif stream_info and today_matches_from_title is not None:
+                    elif stream_info and today_matches_from_title:
                         print("Matches are updating")
                         self.db_helper.update_match_to_database(game)
                         self.schedule_tasks(today_matches_from_title)
@@ -263,16 +263,18 @@ class LivescoreScraper:
             print(f"Folder not found: {folder_path}")
 
     def run_parallel(self):
-        while True:
-            try:
-                self.db_helper.open_database_connection()
-                self.get_today_matches()
-            except Exception as e:
-                print(f"Error in run_continuous: {e}")
-            finally:
-                self.db_helper.close_database_connection()
+        try:
+            self.db_helper.open_database_connection()
 
-            time.sleep(5)
+            while True:
+                try:
+                    self.get_today_matches()
+                except Exception as e:
+                    print(f"Error in run_continuous: {e}")
+
+                time.sleep(5)
+        finally:
+            self.db_helper.close_database_connection()
 
 
 def main():
