@@ -51,7 +51,7 @@ class LivestreamCapturer:
                         'ffmpeg',
                         '-i', m3u8_url,
                         '-segment_wrap', '4',
-                        '-segment_time', '120',
+                        '-segment_time', '60',
                         '-segment_list', self.segment_list,
                         '-f', 'segment',
                         '-c', 'copy',

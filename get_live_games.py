@@ -115,8 +115,9 @@ class LivescoreScraper:
                     today_matches_from_title = self.db_helper.get_time_matches_from_title(game["title"])
                     is_in_today_matches = self.db_helper.get_today_matches_from_title(game["title"])
                     is_game_finished = self.db_helper.get_match_finished(game["title"])
+                    is_game_opened = self.db_helper.get_match_opened(game["title"])
                     if not is_game_finished:
-                        if not today_matches_from_title and not is_in_today_matches:
+                        if not today_matches_from_title and not is_in_today_matches and not is_game_opened:
                             stream_info = self.get_url_games(home_team_name, away_team_name)
                             if stream_info and self.is_valid_time_format(game['match_time']):
                                 print("Matches are creating")
@@ -239,44 +240,13 @@ class LivescoreScraper:
                     )
 
                     subprocess.run(ffmpeg_command, shell=True)
+
+                    secure_url = self.upload_to_cloudinary(os.path.join(folder_path, full_filename),
+                                                           filename)
+                    print("secure_url", filename)
+                    return secure_url
                 except Exception as e:
                     print("An error occurred:", str(e))
-
-    def save_goal_test(self, title, filename, num_to_keep=3):
-        print("Goaaaaaaaaaal", title)
-
-        folder_path = os.path.join(os.getcwd(), title)
-
-        if os.path.exists(folder_path):
-            ts_files = [filename for filename in os.listdir(folder_path) if
-                        filename.endswith(".ts") and self.is_valid_video(os.path.join(folder_path, filename))]
-
-            # Find the latest numeric part without sorting
-            ts_files.sort(key=lambda x: os.path.getmtime(os.path.join(folder_path, x)), reverse=True)
-
-            files_to_keep = ts_files[:-num_to_keep]
-
-            with open(os.path.join(folder_path, 'file_list.txt'), 'w') as file_list:
-                for ts_file in files_to_keep[::-1]:
-                    file_list.write(f"file '{ts_file}'\n")
-
-            ffmpeg_command = (
-                f'ffmpeg -f concat -safe 0 -i "{os.path.join(folder_path, "file_list.txt")}" '
-                f'-c copy -async 1 "{os.path.join(folder_path, filename)}"'
-            )
-
-            subprocess.run(ffmpeg_command, shell=True)
-
-            os.remove(os.path.join(folder_path, 'file_list.txt'))
-
-            base_filename, extension = os.path.splitext(filename)
-            public_id = base_filename
-            secure_url = self.upload_to_cloudinary(os.path.join(folder_path, filename),
-                                                   public_id)
-            print("secure_url")
-            return secure_url
-        else:
-            print(f"Folder not found: {folder_path}")
 
     def run_parallel(self):
         try:
