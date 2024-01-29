@@ -3,29 +3,36 @@ import subprocess
 import time
 from datetime import datetime, timedelta
 
-from mysql.connector.pooling import MySQLConnectionPool
+from celery import Celery
+from celery.result import AsyncResult
 from moviepy.video.io.VideoFileClip import VideoFileClip
 from seleniumwire import webdriver
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from threading import Lock
 from bs4 import BeautifulSoup
 from fuzzywuzzy import fuzz
 import requests
-import json
 from apscheduler.schedulers.background import BackgroundScheduler
 from get_m3u8 import LivestreamCapturer
 import cloudinary
 from cloudinary.uploader import upload
 from database_operations import DatabaseHelper
+from celery.utils.log import get_task_logger
 
+
+celery = Celery(__name__)
+logger = get_task_logger(__name__)
+celery.config_from_object('celery_config')
+
+@celery.task(name='multiprocess')
+def multiprocess(url, title):
+    print("multiprocess")
+    capturer = LivestreamCapturer(url, title)
+    capturer.capture_livestream()
 
 class LivescoreScraper:
     def __init__(self):
         self.logger = None
         self.driver = None
         self.today_date = datetime.today().strftime('%Y-%m-%d')
-        self.livestream_executor = ProcessPoolExecutor(max_workers=3)
-        self.main_executor = ThreadPoolExecutor()
         self.scheduler = BackgroundScheduler()
         self.scheduler.start()
         self.current_time = datetime.now().time()
@@ -46,22 +53,9 @@ class LivescoreScraper:
             save_goal=self.save_goal,
         )
 
-        # Establish MySQL connection
-        # self.db_pool = MySQLConnectionPool(
-        #     pool_name="soccer_pool",
-        #     pool_size=5,
-        #     host=self.db_host,
-        #     user=self.db_user,
-        #     password=self.db_password,
-        #     database=self.db_name,
-        #     port= self.port
-        # )
-
         self.mysql_conn = None
         self.db_pool = None
         self.mysql_cursor = None
-        # self.mysql_conn = self.db_pool.get_connection()
-        # self.mysql_cursor = self.mysql_conn.cursor(dictionary=True)
 
     def start_driver(self):
         options = webdriver.ChromeOptions()
@@ -74,8 +68,6 @@ class LivescoreScraper:
                 self.driver.quit()
         except Exception as e:
             print(f"Error while stopping driver: {e}")
-        finally:
-            self.db_helper.close_database_connection()
 
     def upload_to_cloudinary(self,video_path, public_id):
         cloudinary.config(
@@ -119,28 +111,29 @@ class LivescoreScraper:
                         "is_finished": False,
                     }
 
-                    stream_info = self.get_url_games(home_team_name)
-                    today_matches_from_title = self.db_helper.get_today_matches_from_title(game["title"])
-                    if stream_info and not today_matches_from_title:
-                        print("Matches are creating")
-                        stream_url, league_name = stream_info
-                        game["stream"] = stream_url
-                        game["league_name"] = league_name
-                        self.db_helper.save_match_to_database(game)
-                    elif stream_info and today_matches_from_title:
-                        print("Matches are updating")
-                        self.db_helper.update_match_to_database(game)
-                        self.schedule_tasks(today_matches_from_title)
+
+                    today_matches_from_title = self.db_helper.get_time_matches_from_title(game["title"])
+                    is_in_today_matches = self.db_helper.get_today_matches_from_title(game["title"])
+                    is_game_finished = self.db_helper.get_match_finished(game["title"])
+                    if not is_game_finished:
+                        if not today_matches_from_title and not is_in_today_matches:
+                            stream_info = self.get_url_games(home_team_name, away_team_name)
+                            if stream_info and self.is_valid_time_format(game['match_time']):
+                                print("Matches are creating")
+                                stream_url, league_name = stream_info
+                                game["stream"] = stream_url
+                                game["league_name"] = league_name
+                                self.db_helper.save_match_to_database(game)
+                        elif today_matches_from_title:
+                            print("Matches are updating")
+                            self.db_helper.update_match_to_database(game)
+                            self.schedule_tasks(today_matches_from_title)
 
                 time.sleep(10)
         finally:
             self.stop_driver()
-            if self.mysql_cursor:
-                self.mysql_cursor.close()
-            if self.mysql_conn:
-                self.mysql_conn.close()
 
-    def get_url_games(self, title):
+    def get_url_games(self, home_team_name, away_team_name):
         base_url = "https://bingsport.xyz/"
 
         response = requests.get("https://bingsport.xyz/football")
@@ -155,24 +148,19 @@ class LivescoreScraper:
             if len(url_link.split("/")) == 3:
                 http_split = url_link.split("/")[2]
                 if "vs" in http_split:
-                    split_name = http_split.split("vs")[0].replace('_', " ")
-                    team_name = split_name.strip()
-                    bing = team_name.lower()
-                    livescore = title.lower()
-                    if self.are_teams_similar(bing, livescore):
+                    bing_home, bing_away = [team.strip().replace('_', ' ').lower() for team in http_split.split("vs")]
+                    livescore_home, livescore_away = home_team_name.lower(), away_team_name.lower()
+
+                    if self.are_teams_similar(bing_home, livescore_home, bing_away, livescore_away):
                         print("Getting a new game stream")
                         return link, league_name
         else:
             return None
 
-    def are_teams_similar(self, team1, team2, threshold=80):
-        ratio = fuzz.partial_ratio(team1.lower(), team2.lower())
-        return ratio >= threshold
-
-    def multiproccess(self, url, title):
-        print("multiproccess")
-        capturer = LivestreamCapturer(url, title)
-        self.livestream_executor.submit(capturer.capture_livestream)
+    def are_teams_similar(self, team1_home, team2_home, team1_away, team2_away, threshold=80):
+        ratio_home = fuzz.partial_ratio(team1_home.lower(), team2_home.lower())
+        ratio_away = fuzz.partial_ratio(team1_away.lower(), team2_away.lower())
+        return (ratio_home >= threshold) and (ratio_away >= threshold)
 
     def schedule_tasks(self, today_matches_from_title):
         print("scheduler")
@@ -194,6 +182,12 @@ class LivescoreScraper:
                     # Remove match if time difference exceeds 150 minutes
                     if time_difference >= 150:
                         self.db_helper.set_match_finished(match["id"])
+                        task_id = self.db_helper.get_task_id_for_match(match["id"])
+                        if task_id:
+                            result = AsyncResult(task_id)
+                            result.revoke(terminate=True)
+                        else:
+                            print(f"No task found for match {match['title']}.")
                 else:
                     self.db_helper.set_match_finished(match["id"])
         except Exception as e:
@@ -202,7 +196,9 @@ class LivescoreScraper:
 
     def check_scheduled_task(self, url, title):
         print(f"Scheduled task executed for {title} at {datetime.now()}")
-        self.multiproccess(url, title)
+        result = multiprocess.delay(url, title)
+        task_id = result.id
+        self.db_helper.set_task_id_matches(title, task_id)
 
     def is_valid_time_format(self, time_str):
         try:
@@ -219,7 +215,32 @@ class LivescoreScraper:
             print(f"Invalid video file: {file_path}. Error: {e}")
             return False
 
-    def save_goal(self, title, filename):
+    def save_goal(self,title, filename, num_to_keep=2):
+        print("Goaaaaaaaaaal", title)
+
+        if os.path.exists(os.path.join(os.getcwd(), title)):
+
+            folder_path = os.path.join(os.getcwd(), title)
+
+            if os.path.exists( os.path.join(folder_path, f'{title}.ffcat')):
+
+                input_ffcat = f"{title}.ffcat"
+                output_ffcat = f"{filename}.ffcat"
+                command = f"tail -n {num_to_keep} {input_ffcat} > {output_ffcat}"
+
+                try:
+                    subprocess.run(command, shell=True)
+
+                    ffmpeg_command = (
+                        f'ffmpeg -f concat -safe 0 -i "{os.path.join(folder_path, output_ffcat)}" '
+                        f'-c copy -async 1 "{os.path.join(folder_path, filename)}"'
+                    )
+
+                    subprocess.run(ffmpeg_command, shell=True)
+                except Exception as e:
+                    print("An error occurred:", str(e))
+
+    def save_goal_test(self, title, filename, num_to_keep=3):
         print("Goaaaaaaaaaal", title)
 
         folder_path = os.path.join(os.getcwd(), title)
@@ -229,19 +250,12 @@ class LivescoreScraper:
                         filename.endswith(".ts") and self.is_valid_video(os.path.join(folder_path, filename))]
 
             # Find the latest numeric part without sorting
-            numeric_parts = sorted([int(''.join(filter(str.isdigit, ts_file))) for ts_file in ts_files], reverse=True)
+            ts_files.sort(key=lambda x: os.path.getmtime(os.path.join(folder_path, x)), reverse=True)
 
-            # Find the latest and second latest numeric parts
-            file_1, file_2, file_3 = numeric_parts[1], numeric_parts[2], numeric_parts[3]
-
-            file_3_filename = f"{title}_{file_3:03d}.ts"
-            file_2_filename = f"{title}_{file_2:03d}.ts"
-            file_1_filename = f"{title}_{file_1:03d}.ts"
-
-            ts_file_paths = [os.path.join(folder_path, file_1_filename), os.path.join(folder_path, file_2_filename), os.path.join(folder_path, file_3_filename)]
+            files_to_keep = ts_files[:-num_to_keep]
 
             with open(os.path.join(folder_path, 'file_list.txt'), 'w') as file_list:
-                for ts_file in ts_file_paths:
+                for ts_file in files_to_keep[::-1]:
                     file_list.write(f"file '{ts_file}'\n")
 
             ffmpeg_command = (
@@ -274,7 +288,7 @@ class LivescoreScraper:
 
                 time.sleep(5)
         finally:
-            self.db_helper.close_database_connection()
+            print("Closing database connection")
 
 
 def main():

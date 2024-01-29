@@ -1,0 +1,11 @@
+first command
+
+redis-server
+
+second command
+
+celery -A get_live_games worker --loglevel=info
+
+third command
+
+python get_live_games.py
