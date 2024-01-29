@@ -90,7 +90,7 @@ class DatabaseHelper:
             ):
                 secure_url = self.save_goal(
                     title=match_data["title"],
-                    filename=f"{match_data['title']}_{match_data['score_home']}-{match_data['score_away']}.mp4",
+                    filename=f"{match_data['title']}_{match_data['score_home']}-{match_data['score_away']}",
                 )
                 self.save_goal_to_database(
                     title=match_data["title"],
