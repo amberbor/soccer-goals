@@ -66,17 +66,13 @@ class DatabaseHelper:
             query = (
                 "UPDATE matches "
                 "SET score_home = %s, "
-                "    score_away = %s, "
-                "    is_opened = %s, "
-                "    is_finished = %s "
+                "    score_away = %s "
                 "WHERE title = %s"
             )
 
             values = (
                 match_data['score_home'],
                 match_data['score_away'],
-                match_data['is_opened'],
-                match_data['is_finished'],
                 match_data['title']
             )
 
