@@ -149,7 +149,7 @@ class LivescoreScraper:
             if len(url_link.split("/")) == 3:
                 http_split = url_link.split("/")[2]
                 if "vs" in http_split:
-                    bing_home, bing_away = [team.strip().replace('_', ' ').lower() for team in http_split.split("vs")]
+                    bing_home, bing_away = [team.strip().replace('_', ' ').lower() for team in http_split.split("_vs_")]
                     livescore_home, livescore_away = home_team_name.lower(), away_team_name.lower()
 
                     if self.are_teams_similar(bing_home, livescore_home, bing_away, livescore_away):
