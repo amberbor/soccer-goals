@@ -1,5 +1,11 @@
 import os
+import random
+import re
+import string
 import subprocess
+import uuid
+from datetime import datetime
+
 from seleniumwire import webdriver
 
 
@@ -8,14 +14,24 @@ class LivestreamCapturer:
         self.url = url
         self.title = title
         self.max_segments = max_segments
-        self.segments = []  # List to store segment filenames
         self.output_video_path = f"{self.title}/{self.title}_%03d.ts"
+        self.segment_list = f"{self.title}/{self.title}.ffcat"
         self.driver = None
 
     def start_driver(self):
-        chrome_options = webdriver.ChromeOptions()
-        chrome_options.add_argument('--headless')
-        self.driver = webdriver.Chrome(options=chrome_options)
+        options = webdriver.ChromeOptions()
+        options.add_argument('--ignore-ssl-errors=yes')
+        options.add_argument('--ignore-certificate-errors')
+        options.add_argument('--headless')
+        options.add_argument('--disable-gpu')
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--no-sandbox")
+
+        wire_options = {
+            'auto_config': False,
+            'addr': '0.0.0.0'
+        }
+        self.driver = webdriver.Remote(command_executor='http://localhost:4444/wd/hub',seleniumwire_options=wire_options, options=options)
 
     def stop_driver(self):
         if self.driver:
@@ -44,17 +60,20 @@ class LivestreamCapturer:
                     ffmpeg_command = [
                         'ffmpeg',
                         '-i', m3u8_url,
+                        '-segment_wrap', '4',
                         '-segment_time', '60',
+                        '-segment_list', self.segment_list,
                         '-f', 'segment',
                         '-c', 'copy',
                         '-map', '0',
                         '-bsf:v', 'h264_mp4toannexb',
                         '-reset_timestamps', '1',
-                        self.output_video_path  # Use the generated filename
+                        '-flags', '+global_header',
+                        '-segment_format', 'mpegts',
+                        '-n',
+                        self.output_video_path
                     ]
-
-                    # Run the ffmpeg command
-                    subprocess.Popen(ffmpeg_command)
+                    subprocess.run(ffmpeg_command)
                 else:
                     print("not found")
 

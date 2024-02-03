@@ -1,13 +1,16 @@
-import React, { useState } from 'react';
+import React, {useEffect, useState} from 'react';
 import { Modal, Button } from 'react-bootstrap';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import './App.css';
 import GoalInfo from "./GoalInfo";
+import axios from "axios";
 
 
 
-const MatchEntry = ({ team1, country1, score, team2, country2, img1, img2 }) => {
+const MatchEntry = ({matchId, team1, country1, score, team2, country2, img1, img2 }) => {
   const [showModal, setShowModal] = useState(false);
+  const [goals, setGoals] = useState([]);
+
 
   const handleShowModal = () => {
     setShowModal(true);
@@ -17,11 +20,17 @@ const MatchEntry = ({ team1, country1, score, team2, country2, img1, img2 }) => 
     setShowModal(false);
   };
 
-  const goals = [
-    { goalScorerHome: "Benzema", goalMinute: "58'", goalScore: "1-0" },
-    { goalScorerAway: "Kane", goalMinute: "60'", goalScore: "1-1" },
-    { goalScorerHome: "Benzema", goalMinute: "69'", goalScore: "2-1" },
-  ];
+  useEffect(() => {
+    // Fetch goals from the backend when the component mounts
+   axios.get(`http://127.0.0.1:5000/goals?matchId=${matchId}`)
+  // Replace with your actual backend endpoint
+      .then(response => {
+        setGoals(response.data);
+      })
+      .catch(error => {
+        console.error("Error fetching goals:", error);
+      });
+  }, []);
 
 
   return (
@@ -31,7 +40,7 @@ const MatchEntry = ({ team1, country1, score, team2, country2, img1, img2 }) => 
           <div className="text-center text-lg-left">
             <div className="d-block d-lg-flex align-items-center">
               <div className="image image-small text-center mb-3 mb-lg-0 mr-lg-3">
-                <img src={img1} alt="Team 1" className="img-fluid" />
+                {/*<img src={img1} alt="Team 1" className="img-fluid" />*/}
               </div>
               <div className="text w-100">
                 <h3 className="h5 mb-0 text-black">{team1}</h3>
@@ -51,7 +60,7 @@ const MatchEntry = ({ team1, country1, score, team2, country2, img1, img2 }) => 
           <div className="">
             <div className="d-block d-lg-flex align-items-center">
               <div className="image image-small ml-lg-3 mb-3 mb-lg-0 order-2">
-                <img src={img2} alt="Team 2" className="img-fluid" />
+                {/*<img src={img2} alt="Team 2" className="img-fluid" />*/}
               </div>
               <div className="text order-1 w-100">
                 <h3 className="h5 mb-0 text-black">{team2}</h3>
@@ -111,7 +120,8 @@ const MatchEntry = ({ team1, country1, score, team2, country2, img1, img2 }) => 
                   goalScorerHome={goal.goalScorerHome}
                   goalScorerAway={goal.goalScorerAway}
                   goalMinute={goal.goalMinute}
-                  goalScore={goal.goalScore}
+                  goalScore={goal.match_score}
+                  goalVideo={goal.match_url}
                 />
               ))}
             </div>
