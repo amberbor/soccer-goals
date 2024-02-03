@@ -1,0 +1,75 @@
+version: '3'
+
+services:
+  mysql:
+    image: mysql:latest
+    container_name: mysql
+    ports:
+      - 3315:3306
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: 1
+      MYSQL_DATABASE: soccer
+    volumes:
+      - 'mysql_data:/var/lib/mysql'
+    networks:
+      - soccer-goals-network
+    command: --bind-address=0.0.0.0 --innodb-buffer-pool-size=512M
+
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    networks:
+      - soccer-goals-network
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Docker/celery-stage/Dockerfile
+    command: celery -A get_live_games worker --loglevel=info
+    depends_on:
+      - redis
+    networks:
+      - soccer-goals-network
+
+  standalone-chromium:
+    image: seleniarm/standalone-chromium:latest
+    ports:
+      - "4444:4444"
+      - "5900:5900"
+      - "7900:7900"
+    networks:
+      - soccer-goals-network
+    shm_size: '2g'
+
+  flask-app:
+    build:
+      context: .
+      dockerfile: Docker/flask-stage/Dockerfile
+    ports:
+      - "5000:5000"
+    depends_on:
+      - mysql
+    links:
+      - mysql
+    networks:
+      - soccer-goals-network
+
+  react-app:
+    build:
+      context: .
+      dockerfile: Docker/react-stage/Dockerfile
+    ports:
+      - "3000:3000"
+    depends_on:
+      - flask-app
+    networks:
+      - soccer-goals-network
+
+networks:
+  soccer-goals-network:
+    driver: bridge
+volumes:
+  mysql_data:
+    driver: local

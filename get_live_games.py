@@ -1,4 +1,5 @@
 import os
+import socket
 import subprocess
 import time
 from datetime import datetime, timedelta
@@ -42,7 +43,7 @@ class LivescoreScraper:
         self.db_user = 'root'
         self.db_password = ''
         self.db_name = 'soccer'
-        self.port = 3308
+        self.port = 3315
 
         self.db_helper = DatabaseHelper(
             host=self.db_host,
@@ -59,8 +60,16 @@ class LivescoreScraper:
 
     def start_driver(self):
         options = webdriver.ChromeOptions()
+        options.add_argument('--ignore-ssl-errors=yes')
+        options.add_argument('--ignore-certificate-errors')
         options.add_argument('--headless')
-        self.driver = webdriver.Chrome(options=options)
+        options.add_argument(f"--proxy-server=host.docker.internal:8801")
+        sw_options ={
+            'addr': '0.0.0.0',
+            'auto_config': False,
+            'port': 8801
+        }
+        self.driver = webdriver.Remote(command_executor='http://0.0.0.0:4444/wd/hub', options=options, seleniumwire_options=sw_options)
 
     def stop_driver(self):
         try:

@@ -2,30 +2,15 @@ from flask import Flask, jsonify,request
 from datetime import datetime
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
+from database.models import db, Match, Goal
+from flask_migrate import Migrate
 
 app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://root:@mysql:3306/soccer'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db.init_app(app)
+migrate = Migrate(app, db)
 CORS(app)
-
-app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://root:@127.0.0.1:3308/soccer'
-db = SQLAlchemy(app)
-
-class Matches(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    home_team_name = db.Column(db.String(255))
-    away_team_name = db.Column(db.String(255))
-    score_home = db.Column(db.String(10))
-    score_away = db.Column(db.String(10))
-    match_time = db.Column(db.String(20))
-    league_name = db.Column(db.String(255))
-    start_date = db.Column(db.String(20))  # Assuming the start_date column is a string
-
-class Goals(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    match_title = db.Column(db.Text)
-    match_url = db.Column(db.Text)
-    start_date = db.Column(db.TIMESTAMP, server_default=db.func.current_timestamp())
-    match_id = db.Column(db.Integer, default=None)
-    match_score = db.Column(db.Text)
 
 @app.route('/matches', methods=['GET'])
 def get_matches():
@@ -33,17 +18,17 @@ def get_matches():
         now = datetime.now()
         today_date = now.strftime('%Y-%m-%d')
 
-        matches_with_scores = Matches.query.filter(
-            Matches.start_date.startswith(today_date),
-            Matches.score_home != "",
-            Matches.score_away != ""
+        matches_with_scores = Match.query.filter(
+            Match.start_date.startswith(today_date),
+            Match.score_home != "",
+            Match.score_away != ""
         ).all()
 
-        remaining_matches = Matches.query.filter(
-            Matches.start_date.startswith(today_date),
-            Matches.score_home == "",
-            Matches.score_away == ""
-        ).order_by(Matches.match_time.asc()).all()
+        remaining_matches = Match.query.filter(
+            Match.start_date.startswith(today_date),
+            Match.score_home == "",
+            Match.score_away == ""
+        ).order_by(Match.match_time.asc()).all()
         all_matches = matches_with_scores + remaining_matches
 
         serialized_matches = [
@@ -68,9 +53,9 @@ def get_goals():
     try:
         match_id = request.args.get('matchId')  # Get matchId from query parameters
         if match_id:
-            goals = Goals.query.filter_by(match_id=match_id).all()
+            goals = Goal.query.filter_by(match_id=match_id).all()
         else:
-            goals = Goals.query.all()
+            goals = Goal.query.all()
         serialized_goals = [
             {
                 "id": goal.id,
@@ -87,4 +72,4 @@ def get_goals():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=5000)

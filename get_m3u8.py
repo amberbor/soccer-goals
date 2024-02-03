@@ -19,9 +19,19 @@ class LivestreamCapturer:
         self.driver = None
 
     def start_driver(self):
-        chrome_options = webdriver.ChromeOptions()
-        chrome_options.add_argument('--headless')
-        self.driver = webdriver.Chrome(options=chrome_options)
+        options = webdriver.ChromeOptions()
+        options.add_argument('--ignore-ssl-errors=yes')
+        options.add_argument('--ignore-certificate-errors')
+        options.add_argument('--headless')
+        options.add_argument('--disable-gpu')
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--no-sandbox")
+
+        wire_options = {
+            'auto_config': False,
+            'addr': '0.0.0.0'
+        }
+        self.driver = webdriver.Remote(command_executor='http://localhost:4444/wd/hub',seleniumwire_options=wire_options, options=options)
 
     def stop_driver(self):
         if self.driver:
